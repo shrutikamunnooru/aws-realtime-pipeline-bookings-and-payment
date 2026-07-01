@@ -320,7 +320,7 @@ echo "Redshift user: $REDSHIFT_USER"
 For Query Editor v2 or a local Redshift client, use:
 
 ```text
-Host: bms-realtime-wg.851725469799.us-east-1.redshift-serverless.amazonaws.com
+Host: bms-realtime-wg.<your-account-id>.us-east-1.redshift-serverless.amazonaws.com
 Port: 5439
 Database: bmsdev
 Username: value of REDSHIFT_USER
@@ -470,26 +470,13 @@ They include:
 - top movies
 - payment failure reasons
 
-You can also test Redshift connectivity from your local machine:
+You can also connect from a local Redshift client (e.g. `psql`) using the values from the stack outputs and the Secrets Manager credentials pulled earlier:
 
 ```bash
-pip install -r requirements-producer.txt
-export AWS_REGION=us-east-1
-export STACK_NAME=bms-realtime-pipeline
-python scripts/test_redshift_connection.py
+psql "host=<RedshiftWorkgroupEndpoint> port=5439 dbname=bmsdev user=awsuser sslmode=require"
 ```
 
-The test script uses a 90-second Redshift socket timeout by default because Redshift Serverless can take longer on the first public connection after a workgroup/network update. Override it with `REDSHIFT_TIMEOUT_SECONDS` if needed.
-
-If you want to pass connection values manually:
-
-```bash
-export REDSHIFT_HOST=bms-realtime-wg.851725469799.us-east-1.redshift-serverless.amazonaws.com
-export REDSHIFT_DATABASE=bmsdev
-export REDSHIFT_USER=awsuser
-export REDSHIFT_PASSWORD='your-secret-password'
-python scripts/test_redshift_connection.py
-```
+The workgroup endpoint isn't a CloudFormation output directly — get it from the Redshift Serverless console (Workgroup configuration) or via `aws redshift-serverless get-workgroup`. Note this only works if `EnablePublicRedshiftAccess` was set to `true` at deploy time; by default Redshift is private and only reachable from inside the VPC (e.g. through the Glue job itself, or Query Editor v2 in the console).
 
 ### 3. Check SQS DLQ
 
@@ -541,9 +528,10 @@ This pipeline was deployed end to end on a live AWS account, run against real tr
 
 ![Spark streaming query progress](screenshots/04-spark-streaming-logs.png)
 
-**Enriched transactions landing in Redshift Serverless** — matched booking-payment pairs, including both `SUCCESS` and `FAILED` payment statuses (a failed payment that arrives within the join window is still a valid matched transaction, not a DLQ case):
+**Enriched transactions landing in Redshift Serverless** — row count from the live run, followed by a sample of matched booking-payment pairs including both `SUCCESS` and `FAILED` payment statuses (a failed payment that arrives within the join window is still a valid matched transaction, not a DLQ case):
 
-![Redshift query results](screenshots/05-redshift-results.png)
+![Redshift row count](screenshots/05-redshift-count.png)
+![Redshift sample rows](screenshots/05-redshift-sample-rows.png)
 
 **Mock producer generating realistic edge cases**, including bookings with `NO_PAYMENT_EVENT` alongside normal `SUCCESS`/`FAILED` outcomes, proving the unmatched-booking scenario was actually exercised, not just theorized:
 
