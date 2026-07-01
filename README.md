@@ -520,9 +520,7 @@ This pipeline was deployed end to end on a live AWS account, run against real tr
 
 ![Kinesis data streams](screenshots/02-kinesis-streams.png)
 
-**Glue Streaming ETL job run** — one continuous run of 15m13s, 2 DPUs (G.1X), 0.5075 total DPU-hours, stopped manually once validation was complete:
-
-![Glue job run details](screenshots/03-glue-job-run.png)
+The Glue Streaming ETL job ran continuously for 15m13s on 2 DPUs (G.1X), totaling 0.5075 DPU-hours, and was stopped manually once validation was complete.
 
 **Spark Structured Streaming internals**, pulled from CloudWatch Logs (`/aws-glue/jobs/logs-v2`), confirming the job is actually running a stateful streaming query against the Kinesis source and writing through the `ForeachBatchSink` (the `process_joined_batch` function that splits matched rows to Redshift and unmatched rows to SQS):
 
@@ -533,9 +531,7 @@ This pipeline was deployed end to end on a live AWS account, run against real tr
 ![Redshift row count](screenshots/05-redshift-count.png)
 ![Redshift sample rows](screenshots/05-redshift-sample-rows.png)
 
-**Mock producer generating realistic edge cases**, including bookings with `NO_PAYMENT_EVENT` alongside normal `SUCCESS`/`FAILED` outcomes, proving the unmatched-booking scenario was actually exercised, not just theorized:
-
-![Producer terminal output](screenshots/06-producer-output.png)
+The mock producer was also run with elevated edge-case rates (`--unmatched-payment-rate`, `--out-of-window-payment-rate`) to generate bookings with no payment event at all, exercising the unmatched-join path described above rather than only the happy path.
 
 > Screenshots live in `screenshots/`. AWS account IDs are cropped from all images before publishing.
 
