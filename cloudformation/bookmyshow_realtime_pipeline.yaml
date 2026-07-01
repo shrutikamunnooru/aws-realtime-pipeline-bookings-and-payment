@@ -1,0 +1,603 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  BookMyShow real-time booking and payment analytics pipeline on AWS.
+  Creates Kinesis streams, SQS DLQ, S3 assets bucket, VPC networking,
+  Redshift Serverless, IAM roles, Glue connection, and Glue streaming job.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: bms-realtime
+    Description: Lowercase project prefix used for resource names.
+    AllowedPattern: "^[a-z][a-z0-9-]{2,24}$"
+
+  KinesisShardCount:
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 10
+
+  RedshiftDatabaseName:
+    Type: String
+    Default: bmsdev
+    AllowedPattern: "^[a-zA-Z][a-zA-Z_0-9]*$"
+
+  RedshiftAdminUsername:
+    Type: String
+    Default: awsuser
+    AllowedPattern: "^[a-zA-Z][a-zA-Z_0-9]*$"
+
+  RedshiftBaseCapacity:
+    Type: Number
+    Default: 8
+    MinValue: 8
+    MaxValue: 512
+
+  GlueWorkerType:
+    Type: String
+    Default: G.1X
+    AllowedValues:
+      - G.1X
+      - G.2X
+
+  GlueNumberOfWorkers:
+    Type: Number
+    Default: 2
+    MinValue: 2
+    MaxValue: 20
+
+  JoinWindowMinutes:
+    Type: Number
+    Default: 15
+    MinValue: 1
+    MaxValue: 120
+
+  WatermarkDelayMinutes:
+    Type: Number
+    Default: 20
+    MinValue: 1
+    MaxValue: 180
+
+  StartingPosition:
+    Type: String
+    Default: LATEST
+    AllowedValues:
+      - LATEST
+      - TRIM_HORIZON
+
+  EnablePublicRedshiftAccess:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Set to true only for demos where local tools or n8n Cloud must connect directly to Redshift.
+
+  AllowedClientIpCidr:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: Client CIDR allowed to connect to public Redshift on port 5439. Prefer your-ip/32.
+
+Conditions:
+  IsPublicRedshiftEnabled: !Equals [!Ref EnablePublicRedshiftAccess, "true"]
+
+Resources:
+  PipelineVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.70.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-vpc"
+
+  PipelineInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Condition: IsPublicRedshiftEnabled
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-igw"
+
+  PipelineInternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Condition: IsPublicRedshiftEnabled
+    Properties:
+      VpcId: !Ref PipelineVpc
+      InternetGatewayId: !Ref PipelineInternetGateway
+
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref PipelineVpc
+      CidrBlock: 10.70.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-private-a"
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref PipelineVpc
+      CidrBlock: 10.70.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-private-b"
+
+  PrivateSubnetC:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref PipelineVpc
+      CidrBlock: 10.70.3.0/24
+      AvailabilityZone: !Select [2, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-private-c"
+
+  PrivateRouteTableA:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref PipelineVpc
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-rt-a"
+
+  PrivateRouteTableB:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref PipelineVpc
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-rt-b"
+
+  PrivateRouteTableC:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref PipelineVpc
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-rt-c"
+
+  PrivateSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetA
+      RouteTableId: !Ref PrivateRouteTableA
+
+  PublicInternetRouteA:
+    Type: AWS::EC2::Route
+    Condition: IsPublicRedshiftEnabled
+    DependsOn: PipelineInternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableA
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref PipelineInternetGateway
+
+  PrivateSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetB
+      RouteTableId: !Ref PrivateRouteTableB
+
+  PublicInternetRouteB:
+    Type: AWS::EC2::Route
+    Condition: IsPublicRedshiftEnabled
+    DependsOn: PipelineInternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableB
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref PipelineInternetGateway
+
+  PrivateSubnetCRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetC
+      RouteTableId: !Ref PrivateRouteTableC
+
+  PublicInternetRouteC:
+    Type: AWS::EC2::Route
+    Condition: IsPublicRedshiftEnabled
+    DependsOn: PipelineInternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableC
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref PipelineInternetGateway
+
+  GlueRedshiftSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allows AWS Glue and Redshift Serverless to communicate privately.
+      VpcId: !Ref PipelineVpc
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-glue-redshift-sg"
+
+  GlueRedshiftSelfIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref GlueRedshiftSecurityGroup
+      IpProtocol: tcp
+      FromPort: 0
+      ToPort: 65535
+      SourceSecurityGroupId: !Ref GlueRedshiftSecurityGroup
+
+  RedshiftPublicClientIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: IsPublicRedshiftEnabled
+    Properties:
+      GroupId: !Ref GlueRedshiftSecurityGroup
+      IpProtocol: tcp
+      FromPort: 5439
+      ToPort: 5439
+      CidrIp: !Ref AllowedClientIpCidr
+
+  VpcEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allows Glue workers to call AWS service VPC endpoints over HTTPS.
+      VpcId: !Ref PipelineVpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref GlueRedshiftSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-vpce-sg"
+
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref PipelineVpc
+      VpcEndpointType: Gateway
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+      RouteTableIds:
+        - !Ref PrivateRouteTableA
+        - !Ref PrivateRouteTableB
+        - !Ref PrivateRouteTableC
+
+  KinesisInterfaceEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref PipelineVpc
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.kinesis-streams"
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+        - !Ref PrivateSubnetC
+      SecurityGroupIds:
+        - !Ref VpcEndpointSecurityGroup
+
+  SqsInterfaceEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref PipelineVpc
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.sqs"
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+        - !Ref PrivateSubnetC
+      SecurityGroupIds:
+        - !Ref VpcEndpointSecurityGroup
+
+  SecretsManagerInterfaceEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref PipelineVpc
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.secretsmanager"
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+        - !Ref PrivateSubnetC
+      SecurityGroupIds:
+        - !Ref VpcEndpointSecurityGroup
+
+  RedshiftDataInterfaceEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref PipelineVpc
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.redshift-data"
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+        - !Ref PrivateSubnetC
+      SecurityGroupIds:
+        - !Ref VpcEndpointSecurityGroup
+
+  LogsInterfaceEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref PipelineVpc
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.logs"
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+        - !Ref PrivateSubnetC
+      SecurityGroupIds:
+        - !Ref VpcEndpointSecurityGroup
+
+  BookingEventStream:
+    Type: AWS::Kinesis::Stream
+    Properties:
+      Name: !Sub "${ProjectName}-booking-events"
+      ShardCount: !Ref KinesisShardCount
+      StreamEncryption:
+        EncryptionType: KMS
+        KeyId: alias/aws/kinesis
+
+  PaymentEventStream:
+    Type: AWS::Kinesis::Stream
+    Properties:
+      Name: !Sub "${ProjectName}-payment-events"
+      ShardCount: !Ref KinesisShardCount
+      StreamEncryption:
+        EncryptionType: KMS
+        KeyId: alias/aws/kinesis
+
+  BookingPaymentDlq:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${ProjectName}-booking-payment-dlq"
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+
+  GlueAssetsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-redshift-temp-files
+            Status: Enabled
+            Prefix: redshift-temp/
+            ExpirationInDays: 7
+          - Id: expire-glue-temp-files
+            Status: Enabled
+            Prefix: glue-temp/
+            ExpirationInDays: 7
+
+  RedshiftAdminSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${ProjectName}/redshift/admin"
+      Description: !Sub "Admin credentials for ${ProjectName} Redshift Serverless."
+      GenerateSecretString:
+        SecretStringTemplate: !Sub '{"username":"${RedshiftAdminUsername}"}'
+        GenerateStringKey: password
+        PasswordLength: 24
+        ExcludeCharacters: "\"@/\\ '"
+
+  RedshiftCopyRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-redshift-copy-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: redshift.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "${ProjectName}-redshift-s3-temp-access"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt GlueAssetsBucket.Arn
+                  - !Sub "${GlueAssetsBucket.Arn}/*"
+
+  GlueJobRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-glue-streaming-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies:
+        - PolicyName: !Sub "${ProjectName}-glue-streaming-access"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - kinesis:DescribeStream
+                  - kinesis:DescribeStreamSummary
+                  - kinesis:GetRecords
+                  - kinesis:GetShardIterator
+                  - kinesis:ListShards
+                  - kinesis:SubscribeToShard
+                Resource:
+                  - !GetAtt BookingEventStream.Arn
+                  - !GetAtt PaymentEventStream.Arn
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                  - sqs:SendMessageBatch
+                Resource: !GetAtt BookingPaymentDlq.Arn
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt GlueAssetsBucket.Arn
+                  - !Sub "${GlueAssetsBucket.Arn}/*"
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref RedshiftAdminSecret
+              - Effect: Allow
+                Action:
+                  - redshift-data:ExecuteStatement
+                  - redshift-data:DescribeStatement
+                  - redshift-data:GetStatementResult
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource: !GetAtt RedshiftCopyRole.Arn
+
+  RedshiftNamespace:
+    Type: AWS::RedshiftServerless::Namespace
+    Properties:
+      NamespaceName: !Sub "${ProjectName}-ns"
+      DbName: !Ref RedshiftDatabaseName
+      AdminUsername: !Ref RedshiftAdminUsername
+      AdminUserPassword: !Sub "{{resolve:secretsmanager:${RedshiftAdminSecret}:SecretString:password}}"
+      DefaultIamRoleArn: !GetAtt RedshiftCopyRole.Arn
+      IamRoles:
+        - !GetAtt RedshiftCopyRole.Arn
+      LogExports:
+        - userlog
+        - connectionlog
+
+  RedshiftWorkgroup:
+    Type: AWS::RedshiftServerless::Workgroup
+    DependsOn:
+      - RedshiftNamespace
+      - GlueRedshiftSelfIngress
+    Properties:
+      WorkgroupName: !Sub "${ProjectName}-wg"
+      NamespaceName: !Ref RedshiftNamespace
+      BaseCapacity: !Ref RedshiftBaseCapacity
+      EnhancedVpcRouting: true
+      PubliclyAccessible: !If [IsPublicRedshiftEnabled, true, false]
+      SecurityGroupIds:
+        - !Ref GlueRedshiftSecurityGroup
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+        - !Ref PrivateSubnetC
+
+  GlueNetworkConnection:
+    Type: AWS::Glue::Connection
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      ConnectionInput:
+        Name: !Sub "${ProjectName}-network-connection"
+        Description: VPC network connection used by the Glue streaming job.
+        ConnectionType: NETWORK
+        ConnectionProperties: {}
+        PhysicalConnectionRequirements:
+          AvailabilityZone: !GetAtt PrivateSubnetA.AvailabilityZone
+          SecurityGroupIdList:
+            - !Ref GlueRedshiftSecurityGroup
+          SubnetId: !Ref PrivateSubnetA
+
+  GlueStreamingJob:
+    Type: AWS::Glue::Job
+    DependsOn:
+      - GlueNetworkConnection
+      - RedshiftWorkgroup
+    Properties:
+      Name: !Sub "${ProjectName}-booking-payment-streaming-etl"
+      Description: Stateful Glue Spark Streaming job for BookMyShow booking-payment joins.
+      Role: !GetAtt GlueJobRole.Arn
+      GlueVersion: "4.0"
+      WorkerType: !Ref GlueWorkerType
+      NumberOfWorkers: !Ref GlueNumberOfWorkers
+      Timeout: 2880
+      MaxRetries: 0
+      Command:
+        Name: gluestreaming
+        PythonVersion: "3"
+        ScriptLocation: !Sub "s3://${GlueAssetsBucket}/scripts/bookmyshow_streaming_etl.py"
+      Connections:
+        Connections:
+          - !Ref GlueNetworkConnection
+      DefaultArguments:
+        "--job-language": python
+        "--enable-continuous-cloudwatch-log": "true"
+        "--enable-continuous-log-filter": "true"
+        "--enable-metrics": "true"
+        "--TempDir": !Sub "s3://${GlueAssetsBucket}/glue-temp/"
+        "--AWS_REGION": !Ref AWS::Region
+        "--BOOKING_STREAM_ARN": !GetAtt BookingEventStream.Arn
+        "--PAYMENT_STREAM_ARN": !GetAtt PaymentEventStream.Arn
+        "--CHECKPOINT_S3_PATH": !Sub "s3://${GlueAssetsBucket}/checkpoints/${ProjectName}"
+        "--DLQ_QUEUE_URL": !Ref BookingPaymentDlq
+        "--REDSHIFT_DATABASE": !Ref RedshiftDatabaseName
+        "--REDSHIFT_TABLE": bms.enriched_transactions
+        "--REDSHIFT_TEMP_S3_DIR": !Sub "s3://${GlueAssetsBucket}/redshift-temp/"
+        "--REDSHIFT_JDBC_URL": !Sub
+          - "jdbc:redshift://${EndpointAddress}:5439/${DatabaseName}"
+          - EndpointAddress: !GetAtt RedshiftWorkgroup.Workgroup.Endpoint.Address
+            DatabaseName: !Ref RedshiftDatabaseName
+        "--REDSHIFT_SECRET_ARN": !Ref RedshiftAdminSecret
+        "--REDSHIFT_COPY_ROLE_ARN": !GetAtt RedshiftCopyRole.Arn
+        "--REDSHIFT_WORKGROUP_NAME": !Ref RedshiftWorkgroup
+        "--JOIN_WINDOW_MINUTES": !Ref JoinWindowMinutes
+        "--WATERMARK_DELAY_MINUTES": !Ref WatermarkDelayMinutes
+        "--STARTING_POSITION": !Ref StartingPosition
+
+Outputs:
+  BookingStreamName:
+    Description: Kinesis stream for booking events.
+    Value: !Ref BookingEventStream
+
+  PaymentStreamName:
+    Description: Kinesis stream for payment events.
+    Value: !Ref PaymentEventStream
+
+  DlqQueueUrl:
+    Description: SQS queue URL for invalid events and unmatched joins.
+    Value: !Ref BookingPaymentDlq
+
+  GlueAssetsBucketName:
+    Description: S3 bucket used for Glue script, checkpoint, and Redshift temp files.
+    Value: !Ref GlueAssetsBucket
+
+  GlueJobName:
+    Description: Glue streaming job name.
+    Value: !Ref GlueStreamingJob
+
+  RedshiftWorkgroupName:
+    Description: Redshift Serverless workgroup name.
+    Value: !Ref RedshiftWorkgroup
+
+  RedshiftDatabaseName:
+    Description: Redshift database name.
+    Value: !Ref RedshiftDatabaseName
+
+  RedshiftAdminSecretArn:
+    Description: Secrets Manager ARN containing Redshift admin credentials.
+    Value: !Ref RedshiftAdminSecret

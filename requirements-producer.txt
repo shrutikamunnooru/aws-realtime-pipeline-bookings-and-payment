@@ -1,0 +1,3 @@
+boto3==1.34.162
+python-dotenv==1.0.1
+redshift-connector==2.1.3

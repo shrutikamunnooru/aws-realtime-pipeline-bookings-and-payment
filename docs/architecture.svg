@@ -1,0 +1,79 @@
+<svg viewBox="0 0 920 640" xmlns="http://www.w3.org/2000/svg" role="img">
+<title>BookMyShow real-time AWS pipeline architecture</title>
+<desc>Python producer sends booking and payment events to two Kinesis streams. A Glue Structured Streaming job parses, validates, watermarks and joins them. Matched rows go to Redshift Serverless; invalid or unmatched rows go to an SQS dead-letter queue.</desc>
+<defs>
+<marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+<path d="M0,0 L10,5 L0,10 z" fill="#57606a"/>
+</marker>
+</defs>
+
+<rect x="0" y="0" width="920" height="640" fill="#ffffff"/>
+
+<rect x="340" y="20" width="240" height="56" rx="10" fill="#f6f8fa" stroke="#d0d7de"/>
+<text x="460" y="44" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="700" fill="#1f2328">Mock Event Producer</text>
+<text x="460" y="64" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#57606a">Python script</text>
+
+<line x1="460" y1="76" x2="460" y2="105" stroke="#57606a" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+<rect x="180" y="108" width="270" height="56" rx="10" fill="#f6f8fa" stroke="#d0d7de"/>
+<text x="315" y="132" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#1f2328">Kinesis: booking-events</text>
+<text x="315" y="150" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="11" fill="#57606a">booking_created</text>
+
+<rect x="470" y="108" width="270" height="56" rx="10" fill="#f6f8fa" stroke="#d0d7de"/>
+<text x="605" y="132" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#1f2328">Kinesis: payment-events</text>
+<text x="605" y="150" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="11" fill="#57606a">payment_completed / failed</text>
+
+<line x1="315" y1="164" x2="440" y2="205" stroke="#57606a" stroke-width="1.5" marker-end="url(#arrow)"/>
+<line x1="605" y1="164" x2="480" y2="205" stroke="#57606a" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+<rect x="140" y="208" width="640" height="210" rx="12" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+<text x="460" y="234" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="700" fill="#1f2328">AWS Glue Streaming ETL</text>
+<text x="460" y="252" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#57606a">Spark Structured Streaming</text>
+
+<g font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#424a53">
+<text x="165" y="280">1. Parse JSON, normalize timestamps/types</text>
+<text x="165" y="302">2. Validate required fields</text>
+<text x="165" y="324">3. Apply watermarks (20 min delay)</text>
+<text x="165" y="346">4. Stateful stream-stream left outer join</text>
+<text x="165" y="368">5. Join key: booking_id, window: 0-15 min</text>
+<text x="165" y="390">6. Create Redshift schema/table on start</text>
+</g>
+
+<line x1="330" y1="418" x2="330" y2="450" stroke="#57606a" stroke-width="1.5" marker-end="url(#arrow)"/>
+<line x1="590" y1="418" x2="590" y2="450" stroke="#57606a" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text x="330" y="436" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="11" fill="#0969da">matched</text>
+<text x="590" y="436" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="11" fill="#0969da">invalid / unmatched</text>
+
+<rect x="180" y="452" width="270" height="60" rx="10" fill="#f6f8fa" stroke="#d0d7de"/>
+<text x="315" y="477" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#1f2328">Redshift Serverless</text>
+<text x="315" y="496" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="11" fill="#57606a">bms.enriched_transactions</text>
+
+<rect x="470" y="452" width="270" height="60" rx="10" fill="#f6f8fa" stroke="#d0d7de"/>
+<text x="605" y="477" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#1f2328">SQS DLQ</text>
+<text x="605" y="496" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="11" fill="#57606a">invalid + unmatched joins</text>
+
+<line x1="60" y1="548" x2="860" y2="548" stroke="#d0d7de" stroke-dasharray="4 4"/>
+<text x="60" y="572" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="700" fill="#57606a">Supporting infrastructure (provisioned by CloudFormation)</text>
+
+<g font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#1f2328">
+<rect x="60" y="586" width="150" height="42" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+<text x="135" y="607" text-anchor="middle" font-weight="700">VPC</text>
+<text x="135" y="621" text-anchor="middle" font-size="10" fill="#57606a">private subnets + endpoints</text>
+
+<rect x="225" y="586" width="150" height="42" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+<text x="300" y="607" text-anchor="middle" font-weight="700">S3</text>
+<text x="300" y="621" text-anchor="middle" font-size="10" fill="#57606a">script, checkpoints, temp</text>
+
+<rect x="390" y="586" width="150" height="42" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+<text x="465" y="607" text-anchor="middle" font-weight="700">Secrets Manager</text>
+<text x="465" y="621" text-anchor="middle" font-size="10" fill="#57606a">Redshift admin creds</text>
+
+<rect x="555" y="586" width="150" height="42" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+<text x="630" y="607" text-anchor="middle" font-weight="700">IAM Roles</text>
+<text x="630" y="621" text-anchor="middle" font-size="10" fill="#57606a">Glue + Redshift COPY access</text>
+
+<rect x="720" y="586" width="150" height="42" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+<text x="795" y="607" text-anchor="middle" font-weight="700">CloudWatch</text>
+<text x="795" y="621" text-anchor="middle" font-size="10" fill="#57606a">Glue logs + metrics</text>
+</g>
+</svg>
