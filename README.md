@@ -90,6 +90,14 @@ ORDER BY booking_ts DESC LIMIT 20;
 
 More business queries (revenue, payment success rate, top cities/movies, failure reasons) in [sql/analytics_queries.sql](sql/analytics_queries.sql). Expected SQS `dlq_source` values: `invalid_booking_event`, `invalid_payment_event`, `unmatched_booking_payment_join`.
 
+## Troubleshooting
+
+If Kinesis stream creation fails with `InternalFailure` in CloudFormation, test `aws kinesis create-stream` directly outside CloudFormation to see the real error. If it returns `SubscriptionRequiredException`, your AWS account is on the newer "Free account plan" (separate from Free Tier usage limits), which blocks entire services like Kinesis and Redshift regardless of whether a card is on file — fix by upgrading the account plan in Billing settings.
+
+If a stack is stuck in `ROLLBACK_COMPLETE`, CloudFormation won't update it no matter what you change — delete the stack and redeploy from scratch instead of retrying the same command.
+
+If Redshift Query Editor v2 shows "permission denied," it usually reconnected using IAM temporary credentials instead of the actual `awsuser` database login, so it has no grants on a schema owned by `awsuser` — reconnect explicitly with username/password auth using the Secrets Manager credentials.
+
 ## Deployment Evidence
 
 This pipeline was deployed end to end on a live AWS account, run against real traffic from the mock producer, validated, then torn down. Screenshots below are from that run.
