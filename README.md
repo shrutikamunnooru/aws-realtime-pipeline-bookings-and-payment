@@ -97,20 +97,6 @@ Main file: [producers/mock_bms_event_producer.py](producers/mock_bms_event_produ
 
 ---
 
-## 🚀 Deployment Overview
-
-Full step-by-step commands (CLI config, stack deploy, fetching Redshift credentials, uploading the Glue script, starting the job, running the producer, and validation queries) are in [`docs/SETUP.md`](docs/SETUP.md). Short version:
-
-1. `aws configure` and confirm identity with `aws sts get-caller-identity`.
-2. Deploy the CloudFormation stack: `aws cloudformation deploy --stack-name bms-realtime-pipeline --template-file cloudformation/bookmyshow_realtime_pipeline.yaml --capabilities CAPABILITY_NAMED_IAM --parameter-overrides ProjectName=bms-realtime`. For local BI tools that need direct Redshift access, use `./scripts/deploy_stack.sh` instead, which opens Redshift publicly on port 5439 (demo convenience only — restrict `ALLOWED_CLIENT_IP_CIDR` for anything beyond a demo).
-3. Fetch stack outputs and the generated Redshift credentials from Secrets Manager (`RedshiftAdminSecretArn` output).
-4. Upload the Glue script to the stack-created S3 bucket: `bash scripts/upload_glue_job.sh`.
-5. Start the Glue streaming job: `bash scripts/start_glue_job.sh` (it creates the Redshift schema/table automatically on first run).
-6. Set up a local Python venv and run the mock producer against the stack's Kinesis stream names.
-7. Validate via CloudWatch Glue logs, Redshift Query Editor v2 (`bms.enriched_transactions`), and the SQS DLQ (`aws sqs receive-message`).
-
----
-
 ## 🔍 Validation
 
 ```sql
